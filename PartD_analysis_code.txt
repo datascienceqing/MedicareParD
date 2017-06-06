@@ -19,7 +19,6 @@ data want;
 run;
 
 
-
 /*total_claim_count=brand+generic+other*/
 /*specialties with total claims ge 1000*/
 proc sql;

@@ -1,0 +1,50 @@
+
+proc sql;
+create table opioid_count_gender as
+select nppes_provider_state, nppes_provider_gender,avg(opioid_claim_count) as avg_count
+from sasuser.partb
+where nppes_provider_gender is not missing
+group by nppes_provider_state, nppes_provider_gender
+
+order by 1;
+quit;
+
+%let count = opioid_claim_count;
+%let cat = specialty_description;
+%let interest = nppes_provider_gender;
+%let n = 10;
+
+
+proc means data=sasuser.partb mean maxdec=2 noprint;
+class &cat &interest;
+var &count;
+output out=summary3a 
+(where= (&interest = 'F'))
+mean=average;
+run;
+
+proc means data=sasuser.partb mean maxdec=2 noprint;
+class &cat &interest;
+var &count;
+output out=summary3b 
+(where= (&interest = 'M'))
+mean=average;
+run;
+
+data diff_gender;
+merge summary3a(rename=(average=avg_f _FREQ_=num_f)) 
+summary3b(rename=(average=avg_m _FREQ_=num_m));
+by &cat;
+run;
+
+data diff_gender(keep=&cat num_diff avg_diff);
+
+set diff_gender(keep=&cat num_f avg_f num_m
+                 avg_m);
+num_diff = num_m-num_f; 
+avg_diff =avg_m -avg_f;
+run;
+
+proc sort data= diff_gender;
+by descending avg_diff;
+run:
