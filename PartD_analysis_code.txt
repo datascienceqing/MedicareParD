@@ -1,0 +1,166 @@
+
+/*1. # beneficiaries*/
+proc univariate data=PARTD_PUF_NPI_SUMMARY_2014;
+var bene_count;
+run;
+/*look at the mean of it, 148.473*/
+
+/*2.Work out for each Specialty the fraction of drug claims that are for brand-name drugs. 
+ Include only providers for whom the relevant information has not been suppressed, 
+ and consider only specialties with at least 1000 total claims. What is the standard deviation of these fractions?*/
+/*figure out relationship*/
+proc sql noprint;
+   select name into : names separated by ' '
+   from dictionary.columns
+   where libname='WORK' and memname='PARTD_PUF_NPI_SUMMARY_2014' and name like '%claim_count' ;
+quit;
+data want;
+  set sasuser.PARTD_PUF_NPI_SUMMARY_2014(keep=&names);
+run;
+
+
+
+/*total_claim_count=brand+generic+other*/
+/*specialties with total claims ge 1000*/
+proc sql;
+create table spec as
+select distinct specialty_description
+from sasuser.PARTD_PUF_NPI_SUMMARY_2014
+group by specialty_description
+having sum(total_claim_count) ge 1000;
+quit; 
+
+proc sql;
+create table PCNT_brand as
+select specialty_description, sum(brand_claim_count) as brand_tot, sum(total_claim_count) as tot,
+sum(brand_claim_count)/sum(total_claim_count) as pcnt_brand
+from sasuser.PARTD_PUF_NPI_SUMMARY_2014
+where missing(brand_suppress_flag) and missing(generic_suppress_flag) and missing(other_suppress_flag)
+and specialty_description in (select specialty_description from spec)
+group by specialty_description;
+quit;
+
+proc univariate data=PCNT_brand; var pcnt_brand; run; 
+/*std dev=0.08932011*/
+
+/*3.For each provider where the relevant columns are not suppressed, work out the fraction of claims for beneficiaries age 65 and older, 
+as well as the fraction of claims for beneficiaries with a low-income subsidy. What is the Pearson correlation coefficient between these values?*/
+
+proc sql;
+create table corr65_low as 
+select npi, total_claim_count_ge65/total_claim_count as ge65, 
+lis_claim_count/total_claim_count  as low
+from sasuser.PARTD_PUF_NPI_SUMMARY_2014
+where missing(ge65_suppress_flag) and missing(lis_suppress_flag);
+quit;
+
+proc corr data=corr65_low pearson; var ge65 low; run; 
+/*-0.66352*/
+
+/*4.For each provider, estimate the length of the average prescription from the TOTAL_DAY_SUPPLY and TOTAL_CLAIM_COUNT. 
+What is the median, in days, of the distribution of this value across all providers?---29.1038*/
+proc sql;
+create table avg_los as
+select npi, TOTAL_DAY_SUPPLY/TOTAL_CLAIM_COUNT as avg_day
+from PARTD_PUF_NPI_SUMMARY_2014
+;
+quit;
+proc univariate data=avg_los; var avg_los; run;
+
+/*5 Find the ratio of beneficiaries with opioid prescriptions to beneficiaries with antibiotics prescriptions in each state. 
+Assume that each beneficiary attends only a single provider. What is the difference between the largest and smallest ratios?
+0.753387*/
+
+proc sql;
+create table state_ratio as
+select nppes_provider_state, sum(opioid_bene_count)/sum(antibiotic_bene_count) as state_ratio
+from PARTD_PUF_NPI_SUMMARY_2014
+group by 1;
+quit;
+
+proc univariate data=state_ratio; var state_ratio; run;
+
+/*6. Let's find which states have surprisingly high supply of opioids, conditioned on specialty. 
+Work out the average length of an opioid prescription for each provider. 
+For each (state, specialty) pair with at least 100 providers, calculate the average of this value across all providers. 
+Then find the ratio of this value to an equivalent quantity calculated from providers in each specialty across all states. What is the largest such ratio?*/
+/*npi nppes_provider_state specialty_description opioid_claim_count opioid_day_supply*/
+
+proc sql;
+create table state_spec as
+select specialty_description, nppes_provider_state, sum(opioid_day_supply)/sum(opioid_claim_count) as len_opioid
+from PARTD_PUF_NPI_SUMMARY_2014
+group by specialty_description, nppes_provider_state
+having count(distinct npi) ge 100;
+quit;
+
+proc sql;
+create table spec_opioid as
+select specialty_description, sum(opioid_day_supply)/sum(opioid_claim_count) as len_opioid_ALL
+from PARTD_PUF_NPI_SUMMARY_2014
+group by specialty_description
+;
+quit;
+
+proc sql;
+create table state_ratio as
+select a.*, b.len_opioid_ALL, a.len_opioid/b.len_opioid_ALL as opioid_ratio
+from state_spec a
+left join spec_opioid b on a.specialty_description=b.specialty_description;
+quit;
+
+proc univariate data=state_ratio; var opioid_ratio; run; /*2.50748*/
+
+/* import 2013 data PARTD_PUF_NPI_SUMMARY_2013*/
+
+/*7.For each provider for whom the information is not suppressed, 
+figure out the average cost per day of prescriptions in both 2013 and 2014. 
+Use this to estimate the inflation rate for daily prescription costs per provider. 
+What is the average inflation rate across all providers?*/
+
+proc sql;
+create table inf as
+select a.npi, a.total_drug_cost/a.total_day_supply as cost_2013, b.total_drug_cost/b.total_day_supply as cost_2014,
+(calculated cost_2014- calculated cost_2013) /calculated cost_2013 as inf
+from PARTD_PUF_NPI_SUMMARY_2013 a
+join PARTD_PUF_NPI_SUMMARY_2014 b on a.npi=b.npi;
+quit;
+
+proc means data=inf; var inf; run; /*0.2445184*/
+
+/*8.Consider all providers with a defined specialty in both years. 
+Find the fraction of providers who left each specialty between 2013 and 2014. 
+What is the largest such fraction, when considering specialties with at least 1000 proviers in 2013?*/
+
+proc sql;
+create table big_spec as
+select specialty_description
+from PARTD_PUF_NPI_SUMMARY_2013
+group by specialty_description
+having count(distinct npi) ge 1000;
+quit;
+
+
+proc sql;
+create table churn as
+select a.*, b.npi, 
+case when missing(c.stay_2014) then 0
+else c.stay_2014
+end as stay
+from big_spec a
+left join PARTD_PUF_NPI_SUMMARY_2013 b on a.specialty_description=b.specialty_description
+left join (select npi, 1 as stay_2014 from PARTD_PUF_NPI_SUMMARY_2014) c on b.npi=c.npi
+;
+quit;
+
+proc sql;
+create table churn_rate as
+select specialty_description,count(distinct npi) as all_npi2013, sum(stay) as npi_stay,
+(1-sum(stay)/count(distinct npi)) as churn_rate
+from churn
+group by 1
+order by 4 desc;
+quit;  /*largest : 0.630952381*/
+
+
+
